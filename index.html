@@ -7,20 +7,23 @@
   <link rel="icon" type="image/png" sizes="192x192" href="icon.png">
 
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Contacts">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#000000">
 <title>Contacts</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
-html,body{margin:0;height:100%;min-height:100vh;background:#000;overflow:hidden;overscroll-behavior:none}
-@supports (height:100dvh){html,body{min-height:100dvh}}
+html,body{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hidden;overscroll-behavior:none}
+html{position:fixed;top:0;left:0;right:0;bottom:0}
 body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue",Helvetica,Arial,sans-serif;color:#fff;-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%;user-select:none;-webkit-user-select:none;touch-action:manipulation}
 button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;touch-action:manipulation}
 input,textarea{font:inherit;color:inherit;user-select:text;-webkit-user-select:text;-webkit-appearance:none;appearance:none;outline:0;border:0;background:none;border-radius:0}
 svg{display:block}
 
-#app{position:fixed;top:0;left:0;right:0;bottom:0;height:100vh;max-width:480px;margin:0 auto;background:#000;overflow:hidden}
-@supports (height:100dvh){#app{height:100dvh}}
+/* Pinned to all four edges of the layout viewport (no fixed height): this always matches the real
+   screen in standalone mode, unlike 100vh/100dvh which iOS can report wrongly at launch. */
+#app{position:fixed;top:0;left:0;right:0;bottom:0;max-width:480px;margin:0 auto;background:#000;overflow:hidden}
 .view{position:absolute;inset:0;overflow:hidden}
 
 /* ===== LIST ===== */
@@ -114,7 +117,7 @@ svg{display:block}
 .ferr{color:#ff453a;font-size:14px;margin:-8px 18px 14px;min-height:0}
 
 /* ===== MAGIC SETTINGS (secret) ===== */
-#magicOv{position:absolute;inset:0;z-index:60;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;padding:18vh 28px 0}
+#magicOv{position:fixed;top:0;left:0;right:0;bottom:0;z-index:60;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;padding:18vh 28px 0}
 #magicOv.on{display:flex}
 #magicBox{width:100%;max-width:340px;background:#1c1c1e;border-radius:20px;padding:20px 18px 14px;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12),0 10px 40px rgba(0,0,0,.6)}
 #magicBox h3{margin:0 0 16px;font-size:17px;font-weight:600;text-align:center}
@@ -281,11 +284,17 @@ svg{display:block}
     if (w.length === 1) return ch(w[0]);
     return ch(w[0]) + ch(w[w.length - 1]);
   }
-  function sortKey(name) { var w = words(name); return (w[boldIndex(w)] || name).toLowerCase(); }
+  // Section = first letter of the FIRST word of the name, always computed from the live name.
+  function firstWord(name) { return String(name == null ? '' : name).trim().split(/\s+/)[0] || ''; }
+  function plain(str) {
+    var t = String(str);
+    try { if (t.normalize) t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch (e) {}
+    return t.replace(/^[^A-Za-z0-9\u0980-\u09FF]+/, '');
+  }
+  function sortKey(name) { return plain(firstWord(name)).toLowerCase(); }
   function letterOf(name) {
-    var k = sortKey(name).replace(/^[^a-z0-9\u0980-\u09ff]+/, '');
-    var c = (k.charAt(0) || '#').toUpperCase();
-    return /[A-Z]/.test(c) ? c : '#';
+    var c = plain(firstWord(name)).charAt(0).toUpperCase();
+    return /^[A-Z]$/.test(c) ? c : '#';
   }
   function fmtPhone(p) {
     if (/^\+8801\d{9}$/.test(p)) return '+880 ' + p.slice(4, 6) + ' ' + p.slice(6, 10) + ' ' + p.slice(10);
@@ -317,7 +326,6 @@ svg{display:block}
 
   /* ---------- State ---------- */
   var stack = ['list'];
-  var pushed = 0;
   var currentId = null;
   var editingId = null;
   var query = '';
@@ -337,17 +345,25 @@ svg{display:block}
     return c.phone && c.phone.indexOf(q) !== -1;
   }
 
+  var sortedCache = null; // [{c, L, k, n}] sorted once per data change, not on every keystroke
+  function getSorted() {
+    if (!sortedCache) {
+      sortedCache = contacts.map(function (c) {
+        return { c: c, L: letterOf(c.name), k: sortKey(c.name), n: plain(c.name).toLowerCase() };
+      });
+      sortedCache.sort(function (a, b) {
+        if (a.L !== b.L) { if (a.L === '#') return 1; if (b.L === '#') return -1; return a.L < b.L ? -1 : 1; }
+        if (a.k !== b.k) return a.k < b.k ? -1 : 1;
+        return a.n < b.n ? -1 : (a.n > b.n ? 1 : 0);
+      });
+    }
+    return sortedCache;
+  }
+
   function renderList() {
     var box = $('listScroll');
     var q = query.trim();
-    var items = contacts.filter(function (c) { return matches(c, q); });
-    items.sort(function (a, b) {
-      var la = letterOf(a.name), lb = letterOf(b.name);
-      if (la !== lb) { if (la === '#') return 1; if (lb === '#') return -1; return la < lb ? -1 : 1; }
-      var ka = sortKey(a.name), kb = sortKey(b.name);
-      if (ka !== kb) return ka < kb ? -1 : 1;
-      return a.name.toLowerCase() < b.name.toLowerCase() ? -1 : (a.name.toLowerCase() > b.name.toLowerCase() ? 1 : 0);
-    });
+    var items = getSorted().filter(function (e) { return matches(e.c, q); });
     var html = '';
     if (!q) {
       html += '<div class="mycard" data-id="me"><div class="avatar"><img src="pic.png" alt="" draggable="false" data-fb="' + esc(initials(ME.name)) + '" onerror="this.replaceWith(document.createTextNode(this.getAttribute(\'data-fb\')))"></div><div class="mc-text"><div class="mc-name">' + esc(ME.name) + '</div><div class="mc-sub">My Card</div></div></div>';
@@ -356,8 +372,8 @@ svg{display:block}
       html += '<div class="empty">No Results<small>No contacts match \u201C' + esc(q) + '\u201D.</small></div>';
     }
     var cur = null;
-    items.forEach(function (c) {
-      var L = letterOf(c.name);
+    items.forEach(function (e) {
+      var c = e.c, L = e.L;
       if (L !== cur) { cur = L; html += '<div class="section-head" data-letter="' + L + '"><div>' + L + '</div></div>'; }
       html += '<div class="row" data-id="' + esc(c.id) + '"><div class="avatar">' + esc(initials(c.name)) + '</div><div class="rtext"><span>' + nameHTML(c.name) + '</span></div></div>';
     });
@@ -410,6 +426,19 @@ svg{display:block}
   }
 
   /* ---------- Navigation ---------- */
+  // `stack` is the single source of truth and every UI change is synchronous.
+  // Browser history is only mirrored to it (so edge-swipe/hardware Back works) and never drives the UI,
+  // so a lost or late popstate can no longer leave the app stuck on the wrong screen.
+  var histDepth = 0;  // history entries we have pushed that currently exist
+  var histBusy = 0;   // steps of an in-flight history.go(-n)
+  function syncHistory() {
+    if (histBusy) return;
+    var want = stack.length - 1;
+    try {
+      while (histDepth < want) { history.pushState({ n: histDepth + 1 }, ''); histDepth++; }
+      if (histDepth > want) { histBusy = histDepth - want; history.go(-histBusy); }
+    } catch (e) { histDepth = want; histBusy = 0; }
+  }
   function show() {
     var top = stack[stack.length - 1];
     $('detailView').classList.toggle('on', stack.indexOf('detail') !== -1);
@@ -418,22 +447,28 @@ svg{display:block}
     if (top !== 'form') { var a = document.activeElement; if (a && a.blur && a !== document.body) a.blur(); }
   }
   function go(v) {
+    if (stack[stack.length - 1] === v) return false; // never stack the same screen twice
     stack.push(v);
-    try { history.pushState({ n: stack.length }, ''); pushed++; } catch (e) { /* history unavailable */ }
     show();
+    syncHistory();
+    return true;
   }
-  function doBack() { if (stack.length > 1) stack.pop(); show(); }
   function back() {
     if (stack.length < 2) return;
-    if (pushed > 0) { history.back(); } else { doBack(); }
+    stack.pop();
+    show();
+    syncHistory();
   }
   window.addEventListener('popstate', function () {
-    if (pushed > 0) pushed--;
-    doBack();
+    if (histBusy) { histDepth -= histBusy; histBusy = 0; syncHistory(); return; }
+    // user-initiated Back (iOS edge swipe / browser button)
+    if (histDepth > 0) histDepth--;
+    if (stack.length > 1) { stack.pop(); show(); }
+    syncHistory();
   });
 
   function openDetail(id) {
-    if (!byId(id)) return;
+    if (stack[stack.length - 1] !== 'list' || !byId(id)) return;
     currentId = id;
     magicConsume(id);
     go('detail');
@@ -442,8 +477,11 @@ svg{display:block}
   /* ---------- Form ---------- */
   function splitName(name) { var w = words(name); if (w.length < 2) return [name, '']; return [w.slice(0, -1).join(' '), w[w.length - 1]]; }
   function openForm(id) {
+    var top = stack[stack.length - 1];
+    if (top === 'form') return;
     editingId = id || null;
     saving = false;
+    $('saveBtn').disabled = false;
     var f = { first: '', last: '', nick: '', phone: '' };
     if (id) {
       var c = byId(id);
@@ -468,34 +506,34 @@ svg{display:block}
   function updateFormAvatar() { var n = formName(); $('formAvatar').textContent = n ? initials(n) : '+'; }
 
   function saveForm() {
-    if (saving) return;
+    if (saving || stack[stack.length - 1] !== 'form') return;
     var name = formName();
     var phone = normPhone($('fPhone').value);
     var err = $('formErr');
     if (!name) { err.textContent = 'Enter a name.'; $('fFirst').focus(); return; }
     if (!phone) { err.textContent = 'Enter a valid mobile number (7\u201315 digits), e.g. 01712345678.'; $('fPhone').focus(); return; }
-    saving = true;
+    saving = true;               // released synchronously by the next openForm(), no timers involved
     $('saveBtn').disabled = true;
     var data = { first: $('fFirst').value.trim(), last: $('fLast').value.trim(), nick: $('fNick').value.trim(), name: name, phone: phone };
-    var targetId;
+    var targetId, isNew = false;
     if (editingId && byId(editingId) && editingId !== 'me') {
       var c = byId(editingId);
       c.first = data.first; c.last = data.last; c.nick = data.nick; c.name = data.name; c.phone = data.phone;
       targetId = c.id;
     } else {
+      isNew = true;
       targetId = 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
       contacts.push({ id: targetId, name: data.name, first: data.first, last: data.last, nick: data.nick, phone: data.phone, notes: '', fav: false });
     }
     saveContacts();
+    sortedCache = null;          // name changed: recompute section/order from the real name
     renderList();
+    if (isNew) {
+      var el = $('listScroll').querySelector('[data-id="' + targetId + '"]');
+      var sc = $('listScroll');
+      if (el) sc.scrollTop = Math.max(0, el.offsetTop - (sc.clientHeight - el.offsetHeight) / 2);
+    }
     back();
-    setTimeout(function () {
-      saving = false; $('saveBtn').disabled = false;
-      if (!editingId) {
-        var el = $('listScroll').querySelector('[data-id="' + targetId + '"]');
-        if (el) el.scrollIntoView({ block: 'center' });
-      }
-    }, 420);
   }
 
   /* ---------- Detail actions ---------- */
@@ -522,33 +560,46 @@ svg{display:block}
     var a = document.activeElement; if (a && a.id === 'search') a.blur();
     openDetail(el.getAttribute('data-id'));
   });
+  function resetSearch() {
+    $('search').value = ''; query = '';
+    $('clearBtn').style.display = 'none'; $('micBtn').style.display = ''; // mic must come back, or Magic Mode is unreachable
+    renderList(); $('listScroll').scrollTop = 0;
+  }
+  var searchRaf = 0;
   $('listBack').addEventListener('click', function () {
-    if (query) { $('search').value = ''; query = ''; $('clearBtn').style.display = 'none'; renderList(); return; }
-    if (window.history.length > 1 && pushed === 0 && document.referrer) { window.history.back(); }
+    if (query) { resetSearch(); return; }
+    if (window.history.length > 1 && histDepth === 0 && document.referrer) { window.history.back(); }
     else { $('listScroll').scrollTo({ top: 0, behavior: 'smooth' }); }
   });
   $('detailBack').addEventListener('click', back);
-  $('editBtn').addEventListener('click', function () { if (currentId && currentId !== 'me') openForm(currentId); });
+  $('editBtn').addEventListener('click', function () { if (currentId && currentId !== 'me' && stack[stack.length - 1] === 'detail') openForm(currentId); });
   $('addBtn').addEventListener('click', function () { var a = document.activeElement; if (a && a.blur) a.blur(); openForm(null); });
   $('cancelBtn').addEventListener('click', back);
   $('saveBtn').addEventListener('click', saveForm);
   $('micBtn').addEventListener('click', function () { $('search').focus(); });
   $('clearBtn').addEventListener('click', function () {
-    $('search').value = ''; query = ''; $('clearBtn').style.display = 'none'; renderList(); $('search').focus();
+    resetSearch(); $('search').focus();
   });
   $('search').addEventListener('input', function (e) {
     query = e.target.value;
     $('clearBtn').style.display = query ? 'flex' : 'none';
     $('micBtn').style.display = query ? 'none' : 'flex';
-    renderList();
-    $('listScroll').scrollTop = 0;
+    if (!searchRaf) searchRaf = requestAnimationFrame(function () { searchRaf = 0; renderList(); $('listScroll').scrollTop = 0; }); // one render per frame
   });
   $('search').addEventListener('keydown', function (e) { if (e.key === 'Enter') e.target.blur(); });
   ['fFirst', 'fLast', 'fNick'].forEach(function (id) { $(id).addEventListener('input', function () { updateFormAvatar(); $('formErr').textContent = ''; }); });
   $('fPhone').addEventListener('input', function () { $('formErr').textContent = ''; });
+  var focusTimer;
   ['fFirst', 'fLast', 'fNick', 'fPhone'].forEach(function (id) {
     $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); saveForm(); } });
-    $(id).addEventListener('focus', function (e) { var t = e.target; setTimeout(function () { try { t.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (x) {} }, 300); });
+    $(id).addEventListener('focus', function (e) {
+      // scroll only the form's own scroller (scrollIntoView can shift the fixed, overflow:hidden app shell)
+      var t = e.target; clearTimeout(focusTimer);
+      focusTimer = setTimeout(function () {
+        var sc = $('formScroll'), f = t.closest('.field'); if (!f || document.activeElement !== t) return;
+        sc.scrollTo({ top: Math.max(0, f.offsetTop - sc.clientHeight / 3), behavior: 'smooth' });
+      }, 300);
+    });
   });
 
   $('detailScroll').addEventListener('click', function (e) {
@@ -583,12 +634,21 @@ svg{display:block}
 
   // Prevent pinch / double-tap zoom on iOS
   ['gesturestart', 'gesturechange', 'gestureend'].forEach(function (ev) { document.addEventListener(ev, function (e) { e.preventDefault(); }); });
-  var lastTouchEnd = 0;
-  document.addEventListener('touchend', function (e) {
-    var now = Date.now();
-    if (now - lastTouchEnd < 300 && !(e.target.closest && e.target.closest('input,textarea'))) e.preventDefault();
-    lastTouchEnd = now;
-  }, { passive: false });
+  // (Double-tap zoom is already blocked by touch-action:manipulation. The old global touchend handler
+  //  called preventDefault() on quick consecutive taps, which cancelled their clicks: taps "did nothing".)
+
+  // Keep the shell pinned to the screen after keyboard, rotation, resize or returning from background
+  var vpRaf = 0;
+  function fixViewport() {
+    if (vpRaf) return;
+    vpRaf = requestAnimationFrame(function () { vpRaf = 0; if (window.scrollX || window.scrollY) window.scrollTo(0, 0); });
+  }
+  window.addEventListener('resize', fixViewport);
+  window.addEventListener('orientationchange', fixViewport);
+  window.addEventListener('pageshow', fixViewport);
+  document.addEventListener('focusout', fixViewport);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) fixViewport(); });
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', fixViewport);
 
   /* ---------- Magic Mode (secret) ---------- */
   // All state is in memory only: nothing here is written to localStorage or to contact records.
